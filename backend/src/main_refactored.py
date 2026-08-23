@@ -1,4 +1,4 @@
-"""
+﻿"""
 Refactored FastAPI application with proper layered architecture.
 
 This is the new main entry point with:
@@ -58,7 +58,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Application lifespan: startup and shutdown events."""
-        logger.info("🚀 Starting SupoClip API...")
+        logger.info("🚀 Starting Samoo API...")
         try:
             await init_db()
             logger.info("✅ Database initialized")
@@ -66,19 +66,25 @@ def create_app(
                 await load_runtime_settings_cache(db)
             logger.info("✅ Runtime settings loaded")
 
-            await queue_adapter.get_pool()
-            logger.info("✅ Job queue initialized")
+            try:
+                await queue_adapter.get_pool()
+                logger.info("✅ Job queue initialized")
+            except Exception as e:
+                logger.warning(
+                    "⚠️  Redis unavailable — job queue disabled. "
+                    "Video processing will not work until Redis is reachable. Error: %s", e
+                )
 
             yield
         finally:
-            logger.info("🛑 Shutting down SupoClip API...")
+            logger.info("🛑 Shutting down Samoo API...")
             await close_db()
             await queue_adapter.close_pool()
             logger.info("✅ Cleanup complete")
 
     app = FastAPI(
-        title="SupoClip API",
-        description="Refactored Python backend for SupoClip with async job processing",
+        title="Samoo API",
+        description="Refactored Python backend for Samoo with async job processing",
         version="0.2.0",
         lifespan=lifespan,
     )
@@ -93,9 +99,9 @@ def create_app(
         allow_headers=[
             "Content-Type",
             "Authorization",
-            "x-supoclip-user-id",
-            "x-supoclip-ts",
-            "x-supoclip-signature",
+            "x-samoo-user-id",
+            "x-samoo-ts",
+            "x-samoo-signature",
             "x-trace-id",
             "user_id",
         ],
@@ -181,7 +187,7 @@ def create_app(
     def read_root():
         """Root endpoint."""
         return {
-            "name": "SupoClip API",
+            "name": "Samoo API",
             "version": "0.2.0",
             "status": "running",
             "docs": "/docs",

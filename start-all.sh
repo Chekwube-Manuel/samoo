@@ -36,8 +36,16 @@ cd /app/backend
 .venv/bin/uvicorn src.main_refactored:app --host 0.0.0.0 --port 8000 &
 BACKEND_PID=$!
 
-echo "==> Starting arq worker..."
-.venv/bin/arq src.workers.tasks.WorkerSettings &
+echo "==> Starting arq worker (will retry if Redis unavailable)..."
+# Run worker in a retry loop — don't crash the whole container if Redis isn't up yet
+(
+    while true; do
+        cd /app/backend
+        .venv/bin/arq src.workers.tasks.WorkerSettings || true
+        echo "==> Worker exited, retrying in 10s..."
+        sleep 10
+    done
+) &
 WORKER_PID=$!
 
 # Wait for backend health before starting frontend
