@@ -114,8 +114,8 @@ COPY backend/src/ ./src/
 COPY backend/fonts/ ./fonts/
 COPY backend/bin/ ./bin/
 
-# Copy transitions if present (optional)
-COPY backend/transitions/ ./transitions/ 2>/dev/null || true
+# Create transitions dir (populated at runtime if needed)
+RUN mkdir -p ./transitions
 
 RUN mkdir -p /app/uploads /app/clips /app/logs /tmp
 ENV PYTHONPATH=/app/backend
