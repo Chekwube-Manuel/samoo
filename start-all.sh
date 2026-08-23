@@ -1,6 +1,5 @@
 ﻿#!/bin/sh
 # start-all.sh — runs frontend + backend + arq worker in one container
-
 set -e
 
 export PORT=${PORT:-10000}
@@ -8,23 +7,20 @@ export PORT=${PORT:-10000}
 echo "==> Starting Samoo"
 echo "    Frontend : port $PORT"
 echo "    Backend  : port 8000 (internal)"
-echo "    Redis    : ${REDIS_HOST:-localhost}:${REDIS_PORT:-6379}"
+echo "    Redis    : ${REDIS_HOST:-not set}"
 
-# ── Derive Redis host/port/password from REDIS_URL if provided ────────────────
-# Render's fromService connectionString looks like: redis://:password@host:port
+# Derive Redis host/port/password from REDIS_URL if separate vars not provided
 if [ -n "$REDIS_URL" ] && [ -z "$REDIS_HOST" ]; then
-    # Extract host from redis://:pass@host:port or redis://host:port
     REDIS_HOST=$(echo "$REDIS_URL" | sed 's|redis://[^@]*@||; s|redis://||; s|:.*||')
     REDIS_PORT=$(echo "$REDIS_URL" | sed 's|.*:||; s|/.*||')
     REDIS_PASSWORD=$(echo "$REDIS_URL" | sed 's|redis://:||; s|@.*||')
     export REDIS_HOST REDIS_PORT REDIS_PASSWORD
-    echo "    Derived Redis from URL: $REDIS_HOST:$REDIS_PORT"
+    echo "    Derived Redis: $REDIS_HOST:$REDIS_PORT"
 fi
 
-# ── Wire frontend to local backend ────────────────────────────────────────────
 export BACKEND_INTERNAL_URL="http://localhost:8000"
 
-# ── Prisma needs standard postgresql:// (not +asyncpg) ───────────────────────
+# Prisma needs standard postgresql:// not postgresql+asyncpg://
 if [ -n "$FRONTEND_DATABASE_URL" ]; then
     export DATABASE_URL_PRISMA="$FRONTEND_DATABASE_URL"
 else
@@ -36,8 +32,7 @@ cd /app/backend
 .venv/bin/uvicorn src.main_refactored:app --host 0.0.0.0 --port 8000 &
 BACKEND_PID=$!
 
-echo "==> Starting arq worker (will retry if Redis unavailable)..."
-# Run worker in a retry loop — don't crash the whole container if Redis isn't up yet
+echo "==> Starting arq worker (retries if Redis unavailable)..."
 (
     while true; do
         cd /app/backend
@@ -48,8 +43,7 @@ echo "==> Starting arq worker (will retry if Redis unavailable)..."
 ) &
 WORKER_PID=$!
 
-# Wait for backend health before starting frontend
-echo "==> Waiting for backend to be ready..."
+echo "==> Waiting for backend..."
 for i in $(seq 1 30); do
     if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
         echo "==> Backend ready"
@@ -58,9 +52,8 @@ for i in $(seq 1 30); do
     sleep 2
 done
 
-echo "==> Starting Next.js frontend on port $PORT..."
+echo "==> Starting Next.js on port $PORT..."
 cd /app/frontend
-# Explicitly pass all env vars the frontend needs so nothing is lost
 DATABASE_URL="$DATABASE_URL_PRISMA" \
 BETTER_AUTH_SECRET="$BETTER_AUTH_SECRET" \
 BETTER_AUTH_URL="$BETTER_AUTH_URL" \
@@ -74,15 +67,10 @@ PORT="$PORT" \
 node server.js &
 FRONTEND_PID=$!
 
-echo "==> All processes started"
-echo "    Backend  PID: $BACKEND_PID"
-echo "    Worker   PID: $WORKER_PID"
-echo "    Frontend PID: $FRONTEND_PID"
+echo "==> All up — Backend=$BACKEND_PID Worker=$WORKER_PID Frontend=$FRONTEND_PID"
 
-# Exit if any process dies — Render will restart the container
 wait -n 2>/dev/null || wait $FRONTEND_PID
-
-echo "==> A process exited — shutting down container"
+echo "==> A process exited — shutting down"
 kill $BACKEND_PID $WORKER_PID $FRONTEND_PID 2>/dev/null || true
 wait
 exit 1
