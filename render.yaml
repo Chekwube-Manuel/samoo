@@ -27,8 +27,10 @@ services:
   - type: web
     name: supoclip-backend
     runtime: docker
-    dockerfilePath: ./backend/Dockerfile
-    dockerContext: ./backend
+    # dockerfilePath is relative to repo root; dockerContext is the build context
+    # Render resolves dockerfilePath from root, COPY instructions use dockerContext as base
+    rootDir: ./backend
+    dockerfilePath: ./Dockerfile
     startCommand: sh bin/start-combined.sh
     plan: standard
     disk:
@@ -107,8 +109,8 @@ services:
   - type: web
     name: supoclip-frontend
     runtime: docker
-    dockerfilePath: ./frontend/Dockerfile
-    dockerContext: ./frontend
+    rootDir: ./frontend
+    dockerfilePath: ./Dockerfile
     plan: starter
     # NEXT_PUBLIC_* must be baked in at Docker build time
     dockerBuildArgs:
