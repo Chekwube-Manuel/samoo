@@ -1,9 +1,9 @@
-# render.yaml — SupoClip on Render: ONE service (frontend + backend + worker)
+﻿# render.yaml — Samoo on Render: ONE service (frontend + backend + worker)
 #
 # HOW TO DEPLOY:
 #   1. Render dashboard → New → Blueprint → connect Chekwube-Manuel/samoo
 #   2. Fill in OPENAI_API_KEY when prompted
-#   3. Done — app lives at https://supoclip.onrender.com
+#   3. Done — app lives at https://samoo.onrender.com
 #
 # AFTER FIRST DEPLOY:
 #   Run Prisma migrations (one time, from your local machine):
@@ -17,14 +17,14 @@ services:
 
   # ── Redis ────────────────────────────────────────────────────────────────────
   - type: redis
-    name: supoclip-redis
+    name: samoo-redis
     plan: starter
     maxmemoryPolicy: noeviction
     ipAllowList: []
 
   # ── Everything else: Frontend + Backend + Worker in ONE container ─────────────
   - type: web
-    name: supoclip
+    name: samoo
     runtime: docker
     # Single Dockerfile at repo root builds and runs everything
     rootDir: .
@@ -32,7 +32,7 @@ services:
     # Build args — NEXT_PUBLIC_* are baked into the Next.js bundle at build time
     dockerBuildArgs:
       NEXT_PUBLIC_API_URL: http://localhost:8000
-      NEXT_PUBLIC_APP_URL: https://supoclip.onrender.com
+      NEXT_PUBLIC_APP_URL: https://samoo.onrender.com
       NEXT_PUBLIC_SELF_HOST: "true"
       NEXT_PUBLIC_PRO_PRICE_MONTHLY: "10"
       NEXT_PUBLIC_SCALE_PRICE_MONTHLY: "50"
@@ -41,7 +41,7 @@ services:
       NEXT_PUBLIC_SCALE_PLAN_TASK_LIMIT: "300"
     plan: standard
     disk:
-      name: supoclip-media
+      name: samoo-media
       mountPath: /app/uploads
       sizeGB: 20
     healthCheckPath: /
@@ -55,20 +55,25 @@ services:
         value: postgresql://postgres:samoomediaai@db.ipnpbpomyuxoepvuymvk.supabase.co:5432/postgres
 
       # ── Redis ─────────────────────────────────────────────────────────────────
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: samoo-redis
+          property: connectionString
       - key: REDIS_HOST
         fromService:
           type: redis
-          name: supoclip-redis
+          name: samoo-redis
           property: host
       - key: REDIS_PORT
         fromService:
           type: redis
-          name: supoclip-redis
+          name: samoo-redis
           property: port
       - key: REDIS_PASSWORD
         fromService:
           type: redis
-          name: supoclip-redis
+          name: samoo-redis
           property: password
 
       # ── Transcription ─────────────────────────────────────────────────────────
@@ -95,11 +100,11 @@ services:
 
       # ── URLs ──────────────────────────────────────────────────────────────────
       - key: NEXT_PUBLIC_APP_URL
-        value: https://supoclip.onrender.com
+        value: https://samoo.onrender.com
       - key: BETTER_AUTH_URL
-        value: https://supoclip.onrender.com
+        value: https://samoo.onrender.com
       - key: CORS_ORIGINS
-        value: https://supoclip.onrender.com
+        value: https://samoo.onrender.com
       - key: BACKEND_INTERNAL_URL
         value: http://localhost:8000
 
