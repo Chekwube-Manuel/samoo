@@ -1,137 +1,75 @@
-# render.yaml - Deploy everything to Render in one click
-# Prerequisites:
-#   1. Supabase project created, get the connection string (Transaction mode, port 6543)
-#   2. Fill in all env var values marked with "REPLACE_ME" before deploying
+# render.yaml — Deploy SupoClip to Render in one click (Supabase for DB)
 #
-# Deploy: Connect this repo in the Render dashboard → "New Blueprint"
-# Render will create all 3 services (Redis + backend + worker + frontend) automatically.
+# HOW TO DEPLOY:
+#   1. Create a Supabase project → https://supabase.com (free tier is fine)
+#      Get TWO connection strings from Settings → Database → Connection string:
+#        • "Transaction pooler" (port 6543) → DATABASE_URL for the backend service
+#        • "Session pooler" / direct (port 5432) → DATABASE_URL for the frontend service
+#      IMPORTANT: prepend "postgresql+asyncpg://" to the backend URL (not "postgresql://")
 #
-# NOTE: Supabase is your database — Render does NOT create a Postgres instance here.
-# Set DATABASE_URL and FRONTEND_DATABASE_URL from your Supabase project dashboard.
+#   2. Push this repo to GitHub (already done)
+#
+#   3. Render dashboard → New → Blueprint → connect your repo
+#      Render reads this file and creates all services automatically.
+#
+#   4. Fill in every env var marked "sync: false" when Render prompts you.
+#      Render will NOT deploy until all sync:false vars are set.
+#
+# SECRETS CHECKLIST (same value must be used across all services):
+#   BETTER_AUTH_SECRET        → openssl rand -hex 32
+#   BACKEND_AUTH_SECRET       → openssl rand -hex 32  (different from above)
+#   APP_SETTINGS_ENCRYPTION_KEY → openssl rand -hex 32  (different from above)
+#
+# AFTER FIRST DEPLOY — make yourself admin:
+#   Run in Supabase SQL editor:
+#   UPDATE users SET is_admin = true WHERE email = 'your@email.com';
+#
+# ARCHITECTURE ON RENDER:
+#   supoclip-redis    → Render managed Redis
+#   supoclip-backend  → FastAPI + arq worker in ONE container (shared disk for uploads/clips)
+#   supoclip-frontend → Next.js
+#
+# WHY ONE CONTAINER FOR API + WORKER:
+#   Render does not support shared disks between services. Uploaded videos must be
+#   accessible to both the API (receives upload) and the worker (processes video).
+#   Running both in one container via bin/start-combined.sh solves this.
+#
+# COST ESTIMATE:
+#   Redis starter:      $3/mo
+#   Backend standard:  $25/mo  (CPU needed for ffmpeg + video processing)
+#   Frontend starter:   $7/mo
+#   Total:             ~$35/mo + Supabase free tier
 
 services:
-  # ─────────────────────────────────────────────
-  # Redis  (Render managed)
-  # ─────────────────────────────────────────────
+
+  # ── Redis ────────────────────────────────────────────────────────────────────
   - type: redis
     name: supoclip-redis
     plan: starter
     maxmemoryPolicy: noeviction
-    ipAllowList: []   # only allow internal access
+    ipAllowList: []
 
-  # ─────────────────────────────────────────────
-  # Backend  (FastAPI)
-  # ─────────────────────────────────────────────
+  # ── Backend + Worker (combined in one container) ─────────────────────────────
   - type: web
     name: supoclip-backend
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
-    plan: standard           # needs CPU for ffmpeg; upgrade to pro for whisper
+    # Runs API and arq worker together so they share the same disk
+    startCommand: sh bin/start-combined.sh
+    plan: standard
     disk:
       name: supoclip-media
       mountPath: /app/uploads
-      sizeGB: 20             # increase if you process many large videos
-    envVars:
-      # ── Database (Supabase) ──────────────────
-      # Use the "Transaction mode" pooler URL from Supabase: Settings → Database → Connection string
-      # Format: postgresql+asyncpg://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres
-      - key: DATABASE_URL
-        value: REPLACE_ME_postgresql+asyncpg://postgres.xxxx:password@aws-0-region.pooler.supabase.com:6543/postgres
-
-      # ── Redis (auto-wired from the service above) ──
-      - key: REDIS_URL
-        fromService:
-          type: redis
-          name: supoclip-redis
-          property: connectionString
-      # arq uses host/port/password separately — these extract them from the URL
-      - key: REDIS_HOST
-        fromService:
-          type: redis
-          name: supoclip-redis
-          property: host
-      - key: REDIS_PORT
-        fromService:
-          type: redis
-          name: supoclip-redis
-          property: port
-      - key: REDIS_PASSWORD
-        fromService:
-          type: redis
-          name: supoclip-redis
-          property: password
-
-      # ── AI / Transcription ──────────────────
-      - key: TRANSCRIPTION_PROVIDER
-        value: assemblyai             # or: whisper (free, no key needed, needs bigger plan)
-      - key: ASSEMBLY_AI_API_KEY
-        value: REPLACE_ME
-      - key: LLM
-        value: google-gla:gemini-3-flash-preview   # or openai:gpt-4o, anthropic:claude-3-5-sonnet
-      - key: GOOGLE_API_KEY
-        value: REPLACE_ME             # match whichever LLM you chose above
-      # - key: OPENAI_API_KEY
-      #   value: REPLACE_ME
-      # - key: ANTHROPIC_API_KEY
-      #   value: REPLACE_ME
-      # - key: WHISPER_MODEL_SIZE
-      #   value: medium               # only needed when TRANSCRIPTION_PROVIDER=whisper
-
-      # ── Auth secrets (generate with: openssl rand -hex 32) ──
-      - key: BETTER_AUTH_SECRET
-        value: REPLACE_ME
-      - key: BACKEND_AUTH_SECRET
-        value: REPLACE_ME
-      - key: APP_SETTINGS_ENCRYPTION_KEY
-        value: REPLACE_ME
-
-      # ── App URLs ────────────────────────────
-      # Set to your actual Render frontend URL after first deploy, e.g.:
-      # https://supoclip-frontend.onrender.com
-      - key: NEXT_PUBLIC_APP_URL
-        value: REPLACE_ME_https://supoclip-frontend.onrender.com
-      - key: CORS_ORIGINS
-        value: REPLACE_ME_https://supoclip-frontend.onrender.com
-
-      # ── Self-host mode (no billing) ─────────
-      - key: SELF_HOST
-        value: "true"
-      - key: ALLOW_UNSIGNED_BACKEND_AUTH
-        value: "false"
-
-      # ── Optional ────────────────────────────
-      # - key: PEXELS_API_KEY
-      #   value: REPLACE_ME           # for AI B-Roll
-      # - key: DISCORD_FEEDBACK_WEBHOOK_URL
-      #   value: REPLACE_ME
-      # - key: AWS_REGION
-      #   value: us-east-1
-      # - key: AWS_ACCESS_KEY_ID
-      #   value: REPLACE_ME
-      # - key: AWS_SECRET_ACCESS_KEY
-      #   value: REPLACE_ME
-      # - key: SES_FROM_EMAIL
-      #   value: "SupoClip <onboarding@yourdomain.com>"
-
-  # ─────────────────────────────────────────────
-  # Worker  (arq background job processor)
-  # Same Docker image as backend, different start command
-  # ─────────────────────────────────────────────
-  - type: worker
-    name: supoclip-worker
-    runtime: docker
-    dockerfilePath: ./backend/Dockerfile
-    dockerContext: ./backend
-    startCommand: .venv/bin/arq src.workers.tasks.WorkerSettings
-    plan: standard           # needs CPU/RAM for video processing
-    disk:
-      name: supoclip-media   # SAME disk name as backend → shared persistent storage
-      mountPath: /app/uploads
       sizeGB: 20
+    healthCheckPath: /health/db
     envVars:
+      # ── Database (Supabase Transaction pooler, port 6543) ──────────────────
+      # Format: postgresql+asyncpg://postgres.YOURREF:PASSWORD@aws-0-REGION.pooler.supabase.com:6543/postgres
       - key: DATABASE_URL
-        value: REPLACE_ME_postgresql+asyncpg://postgres.xxxx:password@aws-0-region.pooler.supabase.com:6543/postgres
+        sync: false
+
+      # ── Redis (auto-wired) ──────────────────────────────────────────────────
       - key: REDIS_HOST
         fromService:
           type: redis
@@ -147,84 +85,145 @@ services:
           type: redis
           name: supoclip-redis
           property: password
+
+      # ── Transcription ───────────────────────────────────────────────────────
+      # assemblyai = cloud API (fast, accurate, costs ~$0.37/hr audio)
+      # whisper    = local (free, slower, needs more RAM — upgrade plan to standard+)
       - key: TRANSCRIPTION_PROVIDER
         value: assemblyai
       - key: ASSEMBLY_AI_API_KEY
-        value: REPLACE_ME
+        sync: false
+      - key: WHISPER_MODEL_SIZE
+        value: medium
+
+      # ── LLM ─────────────────────────────────────────────────────────────────
+      # Set LLM and the matching API key. Options:
+      #   google-gla:gemini-3-flash-preview  → GOOGLE_API_KEY
+      #   openai:gpt-4o                      → OPENAI_API_KEY
+      #   anthropic:claude-3-5-sonnet-20241022 → ANTHROPIC_API_KEY
       - key: LLM
         value: google-gla:gemini-3-flash-preview
       - key: GOOGLE_API_KEY
-        value: REPLACE_ME
+        sync: false
+      # - key: OPENAI_API_KEY
+      #   sync: false
+      # - key: ANTHROPIC_API_KEY
+      #   sync: false
+
+      # ── Secrets (generate each with: openssl rand -hex 32) ─────────────────
       - key: BETTER_AUTH_SECRET
-        value: REPLACE_ME
+        sync: false
       - key: BACKEND_AUTH_SECRET
-        value: REPLACE_ME
+        sync: false
       - key: APP_SETTINGS_ENCRYPTION_KEY
-        value: REPLACE_ME
+        sync: false
+
+      # ── URLs ─────────────────────────────────────────────────────────────────
+      # Set NEXT_PUBLIC_APP_URL and CORS_ORIGINS to your frontend URL.
+      # Default Render URL format: https://supoclip-frontend.onrender.com
+      # If you add a custom domain, use that instead.
       - key: NEXT_PUBLIC_APP_URL
-        value: REPLACE_ME_https://supoclip-frontend.onrender.com
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+
+      # ── Self-host (no Stripe/billing needed) ────────────────────────────────
       - key: SELF_HOST
         value: "true"
       - key: ALLOW_UNSIGNED_BACKEND_AUTH
         value: "false"
-      # - key: WHISPER_MODEL_SIZE
-      #   value: medium
+      - key: AUTH_SIGNATURE_TTL_SECONDS
+        value: "300"
 
-  # ─────────────────────────────────────────────
-  # Frontend  (Next.js)
-  # ─────────────────────────────────────────────
+      # ── Clip directory (clips go here, separate from uploads) ────────────────
+      - key: OUTPUT_DIR
+        value: /app/uploads/outputs
+
+      # ── Optional features ────────────────────────────────────────────────────
+      # B-Roll stock footage (free Pexels account):
+      # - key: PEXELS_API_KEY
+      #   sync: false
+      # Discord alerts:
+      # - key: DISCORD_FEEDBACK_WEBHOOK_URL
+      #   sync: false
+      # Email notifications via AWS SES:
+      # - key: AWS_REGION
+      #   value: us-east-1
+      # - key: AWS_ACCESS_KEY_ID
+      #   sync: false
+      # - key: AWS_SECRET_ACCESS_KEY
+      #   sync: false
+      # - key: SES_FROM_EMAIL
+      #   value: "SupoClip <onboarding@yourdomain.com>"
+
+  # ── Frontend (Next.js) ───────────────────────────────────────────────────────
   - type: web
     name: supoclip-frontend
     runtime: docker
     dockerfilePath: ./frontend/Dockerfile
     dockerContext: ./frontend
     plan: starter
-    buildCommand: ""   # Dockerfile handles the build
+    # NEXT_PUBLIC_* vars must be baked in at Docker build time.
+    # Render passes these as --build-arg to the Dockerfile builder stage.
+    # If you use a custom domain, change these to match.
+    dockerBuildArgs:
+      NEXT_PUBLIC_API_URL: https://supoclip-backend.onrender.com
+      NEXT_PUBLIC_APP_URL: https://supoclip-frontend.onrender.com
+      NEXT_PUBLIC_SELF_HOST: "true"
+      NEXT_PUBLIC_PRO_PRICE_MONTHLY: "10"
+      NEXT_PUBLIC_SCALE_PRICE_MONTHLY: "50"
+      NEXT_PUBLIC_FREE_PLAN_TASK_LIMIT: "10"
+      NEXT_PUBLIC_PRO_PLAN_TASK_LIMIT: "50"
+      NEXT_PUBLIC_SCALE_PLAN_TASK_LIMIT: "300"
+    healthCheckPath: /api/auth/get-session
     envVars:
-      # ── Database (Supabase — Prisma uses standard postgresql://) ──
-      # Use the "Session mode" or "Direct connection" URL from Supabase (port 5432)
-      # Format: postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:5432/postgres
+      # ── Database (Supabase Session pooler / direct, port 5432) ─────────────
+      # Prisma uses the standard postgresql:// driver (NOT asyncpg)
+      # Format: postgresql://postgres.YOURREF:PASSWORD@aws-0-REGION.pooler.supabase.com:5432/postgres
       - key: DATABASE_URL
-        value: REPLACE_ME_postgresql://postgres.xxxx:password@aws-0-region.pooler.supabase.com:5432/postgres
+        sync: false
 
-      # ── Backend internal URL (container-to-container) ──
-      # On Render, services talk to each other via their render.com URL
-      # Set this to the backend's onrender.com URL
+      # ── Backend ─────────────────────────────────────────────────────────────
+      # Server-side Next.js routes call the backend directly (no CORS).
+      # Use the Render internal URL (https, not http — Render only exposes HTTPS).
       - key: BACKEND_INTERNAL_URL
-        value: REPLACE_ME_https://supoclip-backend.onrender.com
+        value: https://supoclip-backend.onrender.com
       - key: NEXT_PUBLIC_API_URL
-        value: REPLACE_ME_https://supoclip-backend.onrender.com
+        value: https://supoclip-backend.onrender.com
 
-      # ── Auth ──────────────────────────────────
+      # ── Auth ────────────────────────────────────────────────────────────────
+      # Must match backend values exactly
       - key: BETTER_AUTH_SECRET
-        value: REPLACE_ME          # same value as backend
+        sync: false
       - key: BETTER_AUTH_URL
-        value: REPLACE_ME_https://supoclip-frontend.onrender.com
+        value: https://supoclip-frontend.onrender.com
       - key: BACKEND_AUTH_SECRET
-        value: REPLACE_ME          # same value as backend
+        sync: false
       - key: APP_SETTINGS_ENCRYPTION_KEY
-        value: REPLACE_ME          # same value as backend
+        sync: false
 
-      # ── App URL ─────────────────────────────
+      # ── App URL ──────────────────────────────────────────────────────────────
       - key: NEXT_PUBLIC_APP_URL
-        value: REPLACE_ME_https://supoclip-frontend.onrender.com
+        value: https://supoclip-frontend.onrender.com
 
-      # ── Self-host (no billing) ──────────────
+      # ── Runtime config ───────────────────────────────────────────────────────
       - key: SELF_HOST
         value: "true"
       - key: NEXT_PUBLIC_SELF_HOST
         value: "true"
       - key: NODE_ENV
         value: production
+      - key: NEXT_TELEMETRY_DISABLED
+        value: "1"
 
-      # ── Optional ────────────────────────────
+      # ── Optional ─────────────────────────────────────────────────────────────
       # - key: DISABLE_SIGN_UP
       #   value: "false"
       # - key: AWS_REGION
       #   value: us-east-1
       # - key: AWS_ACCESS_KEY_ID
-      #   value: REPLACE_ME
+      #   sync: false
       # - key: AWS_SECRET_ACCESS_KEY
-      #   value: REPLACE_ME
+      #   sync: false
       # - key: SES_FROM_EMAIL
       #   value: "SupoClip <onboarding@yourdomain.com>"
