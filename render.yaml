@@ -1,18 +1,17 @@
-# render.yaml — Deploy SupoClip to Render in one click
+# render.yaml — SupoClip on Render: ONE service (frontend + backend + worker)
 #
 # HOW TO DEPLOY:
-#   1. Push this repo to GitHub (already done)
-#   2. Render dashboard → New → Blueprint → connect your GitHub repo
-#   3. Click Deploy — all services are pre-configured below
+#   1. Render dashboard → New → Blueprint → connect Chekwube-Manuel/samoo
+#   2. Fill in OPENAI_API_KEY when prompted
+#   3. Done — app lives at https://supoclip.onrender.com
 #
-# AFTER FIRST DEPLOY — make yourself admin in Supabase SQL editor:
-#   UPDATE users SET is_admin = true WHERE email = 'your@email.com';
+# AFTER FIRST DEPLOY:
+#   Run Prisma migrations (one time, from your local machine):
+#     DATABASE_URL="postgresql://postgres:samoomediaai@db.ipnpbpomyuxoepvuymvk.supabase.co:5432/postgres" \
+#     npx prisma migrate deploy --schema=samoo/frontend/prisma/schema.prisma
 #
-# Then run Prisma migrations (from your local machine):
-#   DATABASE_URL="postgresql://postgres:samoomediaai@db.ipnpbpomyuxoepvuymvk.supabase.co:5432/postgres" \
-#   npx prisma migrate deploy --schema=frontend/prisma/schema.prisma
-#
-# COST: ~$35/mo (Redis $3 + Backend $25 + Frontend $7) + Supabase free tier
+#   Make yourself admin in Supabase SQL editor:
+#     UPDATE users SET is_admin = true WHERE email = 'your@email.com';
 
 services:
 
@@ -23,27 +22,39 @@ services:
     maxmemoryPolicy: noeviction
     ipAllowList: []
 
-  # ── Backend + Worker (combined — shares disk for uploads/clips) ───────────────
+  # ── Everything else: Frontend + Backend + Worker in ONE container ─────────────
   - type: web
-    name: supoclip-backend
+    name: supoclip
     runtime: docker
-    # dockerfilePath is relative to repo root; dockerContext is the build context
-    # Render resolves dockerfilePath from root, COPY instructions use dockerContext as base
-    rootDir: ./backend
+    # Single Dockerfile at repo root builds and runs everything
+    rootDir: .
     dockerfilePath: ./Dockerfile
-    startCommand: sh bin/start-combined.sh
+    # Build args — NEXT_PUBLIC_* are baked into the Next.js bundle at build time
+    dockerBuildArgs:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_APP_URL: https://supoclip.onrender.com
+      NEXT_PUBLIC_SELF_HOST: "true"
+      NEXT_PUBLIC_PRO_PRICE_MONTHLY: "10"
+      NEXT_PUBLIC_SCALE_PRICE_MONTHLY: "50"
+      NEXT_PUBLIC_FREE_PLAN_TASK_LIMIT: "10"
+      NEXT_PUBLIC_PRO_PLAN_TASK_LIMIT: "50"
+      NEXT_PUBLIC_SCALE_PLAN_TASK_LIMIT: "300"
     plan: standard
     disk:
       name: supoclip-media
       mountPath: /app/uploads
       sizeGB: 20
-    healthCheckPath: /health/db
+    healthCheckPath: /
     envVars:
-      # ── Database (Supabase — asyncpg driver for SQLAlchemy) ─────────────────
+      # ── Database ─────────────────────────────────────────────────────────────
+      # Backend (asyncpg driver — note postgresql+asyncpg://)
       - key: DATABASE_URL
         value: postgresql+asyncpg://postgres:samoomediaai@db.ipnpbpomyuxoepvuymvk.supabase.co:5432/postgres
+      # Frontend/Prisma uses standard postgresql:// — separate var
+      - key: FRONTEND_DATABASE_URL
+        value: postgresql://postgres:samoomediaai@db.ipnpbpomyuxoepvuymvk.supabase.co:5432/postgres
 
-      # ── Redis ───────────────────────────────────────────────────────────────
+      # ── Redis ─────────────────────────────────────────────────────────────────
       - key: REDIS_HOST
         fromService:
           type: redis
@@ -60,7 +71,7 @@ services:
           name: supoclip-redis
           property: password
 
-      # ── Transcription ───────────────────────────────────────────────────────
+      # ── Transcription ─────────────────────────────────────────────────────────
       - key: TRANSCRIPTION_PROVIDER
         value: assemblyai
       - key: ASSEMBLY_AI_API_KEY
@@ -68,14 +79,13 @@ services:
       - key: WHISPER_MODEL_SIZE
         value: medium
 
-      # ── LLM — OpenAI ─────────────────────────────────────────────────────────
-      # Enter your OpenAI key in the Render dashboard after deploying
+      # ── LLM ───────────────────────────────────────────────────────────────────
       - key: LLM
         value: openai:gpt-4o
       - key: OPENAI_API_KEY
         sync: false
 
-      # ── Secrets ─────────────────────────────────────────────────────────────
+      # ── Secrets ───────────────────────────────────────────────────────────────
       - key: BETTER_AUTH_SECRET
         value: bb9dbb00d6f424e995b2d99b3135638214b8bb6aa128bbfcde6626e0837b8b58
       - key: BACKEND_AUTH_SECRET
@@ -83,19 +93,27 @@ services:
       - key: APP_SETTINGS_ENCRYPTION_KEY
         value: c0cb0e997671c75f0ef550b0613f567799bd83f091fa139a22f273c4d4c02090
 
-      # ── URLs ─────────────────────────────────────────────────────────────────
+      # ── URLs ──────────────────────────────────────────────────────────────────
       - key: NEXT_PUBLIC_APP_URL
-        value: https://supoclip-frontend.onrender.com
+        value: https://supoclip.onrender.com
+      - key: BETTER_AUTH_URL
+        value: https://supoclip.onrender.com
       - key: CORS_ORIGINS
-        value: https://supoclip-frontend.onrender.com
+        value: https://supoclip.onrender.com
+      - key: BACKEND_INTERNAL_URL
+        value: http://localhost:8000
 
-      # ── Config ───────────────────────────────────────────────────────────────
+      # ── Config ────────────────────────────────────────────────────────────────
       - key: SELF_HOST
+        value: "true"
+      - key: NEXT_PUBLIC_SELF_HOST
         value: "true"
       - key: ALLOW_UNSIGNED_BACKEND_AUTH
         value: "false"
       - key: AUTH_SIGNATURE_TTL_SECONDS
         value: "300"
+      - key: NODE_ENV
+        value: production
       - key: OUTPUT_DIR
         value: /app/uploads/outputs
       - key: DEFAULT_PROCESSING_MODE
@@ -104,54 +122,3 @@ services:
         value: "4"
       - key: FAST_MODE_TRANSCRIPT_MODEL
         value: universal
-
-  # ── Frontend (Next.js) ───────────────────────────────────────────────────────
-  - type: web
-    name: supoclip-frontend
-    runtime: docker
-    rootDir: ./frontend
-    dockerfilePath: ./Dockerfile
-    plan: starter
-    # NEXT_PUBLIC_* must be baked in at Docker build time
-    dockerBuildArgs:
-      NEXT_PUBLIC_API_URL: https://supoclip-backend.onrender.com
-      NEXT_PUBLIC_APP_URL: https://supoclip-frontend.onrender.com
-      NEXT_PUBLIC_SELF_HOST: "true"
-      NEXT_PUBLIC_PRO_PRICE_MONTHLY: "10"
-      NEXT_PUBLIC_SCALE_PRICE_MONTHLY: "50"
-      NEXT_PUBLIC_FREE_PLAN_TASK_LIMIT: "10"
-      NEXT_PUBLIC_PRO_PLAN_TASK_LIMIT: "50"
-      NEXT_PUBLIC_SCALE_PLAN_TASK_LIMIT: "300"
-    healthCheckPath: /api/auth/get-session
-    envVars:
-      # ── Database (Supabase — standard postgresql:// for Prisma) ────────────
-      - key: DATABASE_URL
-        value: postgresql://postgres:samoomediaai@db.ipnpbpomyuxoepvuymvk.supabase.co:5432/postgres
-
-      # ── Backend ──────────────────────────────────────────────────────────────
-      - key: BACKEND_INTERNAL_URL
-        value: https://supoclip-backend.onrender.com
-      - key: NEXT_PUBLIC_API_URL
-        value: https://supoclip-backend.onrender.com
-
-      # ── Auth ─────────────────────────────────────────────────────────────────
-      - key: BETTER_AUTH_SECRET
-        value: bb9dbb00d6f424e995b2d99b3135638214b8bb6aa128bbfcde6626e0837b8b58
-      - key: BETTER_AUTH_URL
-        value: https://supoclip-frontend.onrender.com
-      - key: BACKEND_AUTH_SECRET
-        value: 77ca81cfb9be834fdf32c4df43919f4e3f1d0e8f1d9ec879c6cad86077e90db7
-      - key: APP_SETTINGS_ENCRYPTION_KEY
-        value: c0cb0e997671c75f0ef550b0613f567799bd83f091fa139a22f273c4d4c02090
-
-      # ── App ──────────────────────────────────────────────────────────────────
-      - key: NEXT_PUBLIC_APP_URL
-        value: https://supoclip-frontend.onrender.com
-      - key: SELF_HOST
-        value: "true"
-      - key: NEXT_PUBLIC_SELF_HOST
-        value: "true"
-      - key: NODE_ENV
-        value: production
-      - key: NEXT_TELEMETRY_DISABLED
-        value: "1"
