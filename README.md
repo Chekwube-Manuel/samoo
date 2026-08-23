@@ -127,7 +127,7 @@ docker-compose up -d
 ```
 
 This starts:
-- **Frontend**: http://localhost:3000
+- **Frontend**: http://localhost:3001
 - **Backend API**: http://localhost:8000 (docs at /docs)
 - **PostgreSQL**: localhost:5432
 - **Redis**: localhost:6379
@@ -144,7 +144,7 @@ Wait until you see health checks passing for all services.
 
 ### 4. Access the App
 
-Open http://localhost:3000 in your browser, create an account, and start clipping!
+Open http://localhost:3001 in your browser, create an account, and start clipping!
 
 If you enable DataFast, also verify that:
 - `/js/script.js` loads from your own app domain

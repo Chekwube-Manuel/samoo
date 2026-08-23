@@ -19,7 +19,11 @@ class Config:
         self.ollama_base_url = self._get_runtime_setting("OLLAMA_BASE_URL")
         self.ollama_api_key = self._get_runtime_setting("OLLAMA_API_KEY")
 
-        self.whisper_model = os.getenv("WHISPER_MODEL", "base")
+        # Accept both WHISPER_MODEL_SIZE (documented in .env.example) and the
+        # legacy WHISPER_MODEL name so neither env var is silently ignored.
+        self.whisper_model = (
+            os.getenv("WHISPER_MODEL_SIZE") or os.getenv("WHISPER_MODEL") or "base"
+        )
         self.transcription_provider = self._normalize_transcription_provider(
             os.getenv("TRANSCRIPTION_PROVIDER", "assemblyai")
         )
