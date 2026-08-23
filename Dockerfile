@@ -1,5 +1,5 @@
-# =============================================================================
-# SupoClip — Single-container build (Frontend + Backend + Worker)
+﻿# =============================================================================
+# Samoo — Single-container build (Frontend + Backend + Worker)
 # Runs on ONE Render service, ONE port (3107 proxied to frontend,
 # backend API available internally on 8000).
 #
@@ -143,15 +143,50 @@ ENV NODE_ENV=production
 ENV PORT=3107
 ENV HOSTNAME=0.0.0.0
 
-# ── Start script ──────────────────────────────────────────────────────────────
-COPY start-all.sh /start-all.sh
-RUN chmod +x /start-all.sh
+# ── Start script (written inline to guarantee LF line endings) ───────────────
+RUN printf '#!/bin/sh\n\
+set -e\n\
+export PORT=${PORT:-10000}\n\
+echo "==> Starting Samoo (port=$PORT)"\n\
+if [ -n "$REDIS_URL" ] && [ -z "$REDIS_HOST" ]; then\n\
+    REDIS_HOST=$(echo "$REDIS_URL" | sed "s|redis://[^@]*@||; s|redis://||; s|:.*||")\n\
+    REDIS_PORT=$(echo "$REDIS_URL" | sed "s|.*:||; s|/.*||")\n\
+    REDIS_PASSWORD=$(echo "$REDIS_URL" | sed "s|redis://:||; s|@.*||")\n\
+    export REDIS_HOST REDIS_PORT REDIS_PASSWORD\n\
+    echo "==> Redis derived: $REDIS_HOST:$REDIS_PORT"\n\
+fi\n\
+export BACKEND_INTERNAL_URL="http://localhost:8000"\n\
+if [ -n "$FRONTEND_DATABASE_URL" ]; then\n\
+    export DATABASE_URL_PRISMA="$FRONTEND_DATABASE_URL"\n\
+else\n\
+    export DATABASE_URL_PRISMA=$(echo "$DATABASE_URL" | sed "s|postgresql+asyncpg://|postgresql://|")\n\
+fi\n\
+echo "==> Starting FastAPI backend..."\n\
+cd /app/backend\n\
+.venv/bin/uvicorn src.main_refactored:app --host 0.0.0.0 --port 8000 &\n\
+BACKEND_PID=$!\n\
+echo "==> Starting arq worker (retries on Redis failure)..."\n\
+(while true; do cd /app/backend; .venv/bin/arq src.workers.tasks.WorkerSettings || true; echo "==> Worker retrying in 10s..."; sleep 10; done) &\n\
+WORKER_PID=$!\n\
+echo "==> Waiting for backend..."\n\
+for i in $(seq 1 30); do\n\
+    if curl -sf http://localhost:8000/health > /dev/null 2>&1; then echo "==> Backend ready"; break; fi\n\
+    sleep 2\n\
+done\n\
+echo "==> Starting Next.js on port $PORT..."\n\
+cd /app/frontend\n\
+DATABASE_URL="$DATABASE_URL_PRISMA" BETTER_AUTH_SECRET="$BETTER_AUTH_SECRET" BETTER_AUTH_URL="$BETTER_AUTH_URL" BACKEND_AUTH_SECRET="$BACKEND_AUTH_SECRET" APP_SETTINGS_ENCRYPTION_KEY="$APP_SETTINGS_ENCRYPTION_KEY" BACKEND_INTERNAL_URL="http://localhost:8000" NEXT_PUBLIC_APP_URL="$NEXT_PUBLIC_APP_URL" SELF_HOST="$SELF_HOST" NODE_ENV=production PORT="$PORT" node server.js &\n\
+FRONTEND_PID=$!\n\
+echo "==> All up: Backend=$BACKEND_PID Worker=$WORKER_PID Frontend=$FRONTEND_PID"\n\
+wait -n 2>/dev/null || wait $FRONTEND_PID\n\
+echo "==> A process exited — shutting down"\n\
+kill $BACKEND_PID $WORKER_PID $FRONTEND_PID 2>/dev/null || true\n\
+wait\n\
+exit 1\n\
+' > /start-all.sh && chmod +x /start-all.sh
 
 WORKDIR /app
 
-# Render assigns PORT env var — we expose 10000 (Render default) on the outside,
-# Next.js listens on 3107 internally, backend on 8000 internally.
-# nginx is overkill for one service — we expose Next.js directly on 10000.
 EXPOSE 10000
 
 CMD ["/start-all.sh"]
